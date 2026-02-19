@@ -4,7 +4,7 @@
    The University of Arizona
    CYBV 489
 
-   Student Names:  <add your group members here>
+   Student Names:  Ian Penrose and Lindsay Wax
 
    ------------------------------------------------------------------------ */
 #include <Windows.h>
@@ -16,6 +16,9 @@
 #include <Messaging.h>
 #include <stdint.h>
 #include "message.h"
+
+
+#define DEVICE_NAME_LEN 16
 
 /* ------------------------- Prototypes ----------------------------------- */
 static void nullsys(system_call_arguments_t* args);
@@ -43,6 +46,10 @@ union psr_values {
 };
 
 
+// New Functions
+void initializeAllDevices();
+
+
 /* -------------------------- Globals ------------------------------------- */
 
 /* Obtained from THREADS*/
@@ -60,7 +67,7 @@ typedef struct
     void* deviceHandle;
     int deviceMbox;
     int deviceType;
-    char deviceName[16];
+    char deviceName[DEVICE_NAME_LEN];
 } DeviceManagementData;
 
 static DeviceManagementData devices[THREADS_MAX_DEVICES];
@@ -76,7 +83,7 @@ static int waitingOnDevice = 0;
 ----------------------------------------------------------------------- */
 int SchedulerEntryPoint(void* arg)
 {
-    // TODO: check for kernel mode
+    checkKernelMode("SchedulerEntryPoint");
 
     /* Disable interrupts */
     disableInterrupts();
@@ -97,17 +104,29 @@ int SchedulerEntryPoint(void* arg)
     // TODO: Create mailboxes for each device.
     //   devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
     //   devices[i].deviceMbox = mailbox_create(..., sizeof(int));
+    devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
+
+    for (int i = 0; i < THREADS_MAX_DEVICES; i++)
+    {
+        devices[i].deviceMbox = mailbox_create(MAXSLOTS, sizeof(int));
+    }
 
     /* TODO: Initialize the devices using device_initialize().
      * The devices are: disk0, disk1, term0, term1, term2, term3.
      * Store the device handle and name in the devices array.
      */
 
+    initializeAllDevices();
+
     InitializeHandlers();
 
     enableInterrupts();
 
     /* TODO: Create a process for Messaging, then block on a wait until messaging exits.*/
+    k_spawn("Messaging", MessagingEntryPoint, NULL, 4 * THREADS_MIN_STACK_SIZE, HIGHEST_PRIORITY);
+
+    int status = -1;
+    k_wait(&status);
 
     k_exit(0);
 
@@ -281,3 +300,22 @@ static inline void checkKernelMode(const char* functionName)
         stop(1);
     }
 }
+
+
+void initializeAllDevices()
+{
+    char* deviceNames[THREADS_MAX_DEVICES - 1] = 
+        {"clock", "disk0", "disk1", "term0", "term1", "term2", "term3" };
+
+    for (int i = 0; i < THREADS_MAX_DEVICES - 1; i++)
+    {
+        strncpy_s(devices[i].deviceName, DEVICE_NAME_LEN, deviceNames[i], DEVICE_NAME_LEN);
+        devices[i].deviceHandle = device_initialize(devices[i].deviceName);
+
+        if (devices[i].deviceHandle == -1)
+        {
+            console_output(false, "Device %s failed to initialize.\n\n", deviceNames[i]);
+        }
+    }
+}
+

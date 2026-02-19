@@ -30,25 +30,25 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup Condition="'$(HasSolution)'=='False'">
-      <ClCompile Include="Messaging.c"/>
+    <ClCompile Include="Messaging.c" />
   </ItemGroup>
   <ItemGroup Condition="'$(HasSolution)'=='True'">
-      <ClCompile Include="Messaging-Solution.c"/>
+    <ClCompile Include="Messaging-Solution.c" />
   </ItemGroup>
   <ItemGroup Condition="'$(HasSolution)'=='True'">
-      <ClCompile Include="NodeList-Solution.c"/>
+    <ClCompile Include="NodeList-Solution.c" />
   </ItemGroup>
   <ItemGroup Condition="'$(HasSolution)'=='True'">
-      <ClInclude Include="NodeList-Solution.h"/>
+    <ClInclude Include="NodeList-Solution.h" />
   </ItemGroup>
   <ItemGroup Condition="'$(HasSolution)'=='True'">
-      <ClInclude Include="message-Solution.h"/>
+    <ClInclude Include="message-Solution.h" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Include\Messaging.h" />
-    <ClInclude Include="Include\THREADSLib.h" /> 
-  </ItemGroup> 
-  
+    <ClInclude Include="Include\THREADSLib.h" />
+    <ClInclude Include="message.h" />
+  </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
