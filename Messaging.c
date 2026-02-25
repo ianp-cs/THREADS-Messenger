@@ -95,6 +95,21 @@ int SchedulerEntryPoint(void* arg)
      * Initialize int_vec and sys_vec, allocate mailboxes for interrupt
      * handlers.  Etc... */
 
+    for (int i = 0; i < MAXMBOX; i++)
+    {
+        mailboxes[i].pSlotListHead = NULL;
+        mailboxes[i].mbox_id = -1;
+    }
+
+    for (int i = 0; i < MAXSLOTS; i++)
+    {
+        mailSlots[i].pNextSlot = NULL;
+        mailSlots[i].pPrevSlot = NULL;
+        mailSlots[i].mbox_id = -1;
+    }
+
+    
+
     /* Initialize the devices and their mailboxes. */
     /* Allocate mailboxes for use by the interrupt handlers.
      * Note: The clock device uses a zero-slot mailbox, while I/O devices
