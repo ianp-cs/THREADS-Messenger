@@ -15,11 +15,11 @@ typedef enum {MBSTATUS_EMPTY=0, MBSTATUS_INUSE, MBSTATUS_RELEASED, MBSTATUS_MAX}
 
 typedef struct mail_slot 
 {
-   SlotPtr   pNextSlot;
-   SlotPtr   pPrevSlot;
-   int       mbox_id;
-   unsigned char message[MAX_MESSAGE];
-   int       messageSize;
+   SlotPtr			pNextSlot;
+   SlotPtr			pPrevSlot;
+   int				mbox_id;
+   unsigned char	message[MAX_MESSAGE];
+   int				messageSize;
    /* other items as needed... */
 
 } MailSlot;
@@ -29,6 +29,7 @@ typedef struct waiting_process
    WaitingProcessPtr    pNextProcess;
    WaitingProcessPtr    pPrevProcess;
    int                  pid;
+   int					index;
    /* other items as needed... */
 } WaitingProcess;
 
@@ -41,6 +42,8 @@ struct mailbox
    MAILBOX_STATUS    status;
    int               slotSize;
    int               slotCount;
+   int				 fullSlots;			// Number of slots that have been filled with messages
+   WaitingProcessPtr waitingProcsHead;	// Pointer to the first process waiting on this mailbox
 };
 
 

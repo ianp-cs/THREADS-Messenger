@@ -47,8 +47,9 @@ union psr_values {
 
 
 // New Functions
-void initializeAllDevices();
-
+static void initializeAllDevices();
+static int findMbox(int mboxId);
+static void cleanMailbox(int index);
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -61,6 +62,9 @@ void (*systemCallVector[THREADS_MAX_SYSCALLS])(system_call_arguments_t* args);
 /* the mail boxes */
 MailBox mailboxes[MAXMBOX];
 MailSlot mailSlots[MAXSLOTS];
+
+/* waiting process table */
+WaitingProcess waitingProcsTable[MAX_PROCESSES];
 
 typedef struct
 {
@@ -99,6 +103,7 @@ int SchedulerEntryPoint(void* arg)
     {
         mailboxes[i].pSlotListHead = NULL;
         mailboxes[i].mbox_id = -1;
+        mailboxes[i].waitingProcsHead = NULL;
     }
 
     for (int i = 0; i < MAXSLOTS; i++)
@@ -159,8 +164,49 @@ int SchedulerEntryPoint(void* arg)
    ----------------------------------------------------------------------- */
 int mailbox_create(int slots, int slot_size)
 {
+    checkKernelMode("mailbox_create");
+
     int newId = -1;
 
+    // Input validation
+    if (slots < 0 || slots > MAXSLOTS)
+    {
+        console_output(false, "mailbox_create(): Attempted to create a mailbox with an invalid number of slots.\n");
+        return -1;
+    }
+
+    if (slot_size < 0 || slot_size > 256)
+    {
+        console_output(false, "mailbox_create(): Attempted to create a mailbox with an invalid slot size.\n");
+        return -1;
+    }
+
+    // Find unused mailbox and initialize it
+    for (int i = 0; i < MAXMBOX; i++)
+    {
+        if (mailboxes[i].mbox_id == -1)
+        {
+            newId = i;
+            mailboxes[i].mbox_id = newId;
+            mailboxes[i].slotCount = slots;
+            mailboxes[i].slotSize = slot_size;
+            mailboxes[i].status = MBSTATUS_EMPTY;
+
+            if (slots == 0)
+            {
+                mailboxes[i].type = MB_ZEROSLOT;
+            }
+            else if (slots == 1)
+            {
+                mailboxes[i].type = MB_MULTISLOT;
+            }
+        }
+    }
+
+    if (newId == -1)
+    {
+        console_output(false, "mailbox_create(): Failed to create mailbox, there is no room for more mailboxes.\n");
+    }
 
     return newId;
 } /* mailbox_create */
@@ -178,7 +224,11 @@ int mailbox_create(int slots, int slot_size)
    ----------------------------------------------------------------------- */
 int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
 {
+    checkKernelMode("mailbox_send");
+
     int result = -1;
+
+
 
     return result;
 }
@@ -195,6 +245,8 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
    ----------------------------------------------------------------------- */
 int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
 {
+    checkKernelMode("mailbox_receive");
+
     int result = -1;
 
     return result;
@@ -210,9 +262,44 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
    ----------------------------------------------------------------------- */
 int mailbox_free(int mboxId)
 {
-    int result = -1;
+    checkKernelMode("mailbox_free");
 
-    return result;
+    int index = findMbox(mboxId);
+
+    // No mbox matches ID
+    if (index == -1)
+    {
+        return -1;
+    }
+
+    WaitingProcess* proc = mailboxes[index].waitingProcsHead;
+
+    while (proc != NULL)
+    {
+        // Tell waiting process to terminate and unblock it
+        k_kill(proc->pid, SIG_TERM);
+        unblock(proc->pid);
+
+        // Clean up the process in the process table
+        WaitingProcess* nextProc = proc->pNextProcess;
+
+        proc->pid = -1;
+        proc->pNextProcess = NULL;
+        proc->pPrevProcess = NULL;
+        proc->index = -1;
+
+        proc = nextProc;
+    }
+
+    cleanMailbox(index);
+
+    // Process signaled while waiting closing mbox
+    if (signaled())
+    {
+        return -5;
+    }
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -317,8 +404,10 @@ static inline void checkKernelMode(const char* functionName)
 }
 
 
-void initializeAllDevices()
+static void initializeAllDevices()
 {
+    checkKernelMode("initializeAllDevices");
+
     char* deviceNames[THREADS_MAX_DEVICES - 1] = 
         {"clock", "disk0", "disk1", "term0", "term1", "term2", "term3" };
 
@@ -334,3 +423,40 @@ void initializeAllDevices()
     }
 }
 
+
+static int findMbox(int mboxId)
+{
+    for (int i = 0; i < MAXMBOX; i++)
+    {
+        if (mailboxes[i].mbox_id == mboxId)
+        {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+
+static void cleanMailbox(int index)
+{
+    MailSlot* slot = mailboxes[index].pSlotListHead;
+
+    // Clean out every slot in the mailbox
+    while (slot != NULL)
+    {
+        MailSlot* nextSlot = slot->pNextSlot;
+
+        slot->pNextSlot = NULL;
+        slot->pPrevSlot = NULL;
+        slot->mbox_id = -1;
+        strcpy(slot->message, "");
+        slot->messageSize = 0;
+
+        slot = nextSlot;
+    }
+
+    mailboxes[index].pSlotListHead = NULL;
+    mailboxes[index].mbox_id = -1;
+    mailboxes[index].waitingProcsHead = NULL;
+}
