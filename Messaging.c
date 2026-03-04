@@ -50,6 +50,11 @@ union psr_values {
 static void initializeAllDevices();
 static int findMbox(int mboxId);
 static void cleanMailbox(int index);
+static void clock_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
+static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
+static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
+static void nullsys(system_call_arguments_t* args);
+
 
 /* -------------------------- Globals ------------------------------------- */
 
@@ -128,7 +133,7 @@ int SchedulerEntryPoint(void* arg)
 
     for (int i = 0; i < THREADS_MAX_DEVICES; i++)
     {
-        devices[i].deviceMbox = mailbox_create(MAXSLOTS, sizeof(int));
+        devices[i].deviceMbox = mailbox_create(5, sizeof(int));
     }
 
     /* TODO: Initialize the devices using device_initialize().
@@ -366,15 +371,15 @@ static void InitializeHandlers()
 {
     handlers = get_interrupt_handlers();
 
-    /* TODO: Register interrupt handlers in the handlers array.
-     * Use the interrupt indices defined in THREADSLib.h:
-     *   handlers[THREADS_TIMER_INTERRUPT]   = your_clock_handler;
-     *   handlers[THREADS_IO_INTERRUPT]      = your_io_handler;
-     *   handlers[THREADS_SYS_CALL_INTERRUPT] = your_syscall_handler;
-     *
-     * Also initialize the system call vector (systemCallVector).
-     */
+    handlers[THREADS_TIMER_INTERRUPT] = clock_handler_messaging;
+    handlers[THREADS_IO_INTERRUPT] = io_handler_messaging;
+    handlers[THREADS_SYS_CALL_INTERRUPT] = sys_call_handler_messaging;
 
+    // Also initialize the system call vector (systemCallVector).
+    for (int i = 0; i < THREADS_MAX_SYSCALLS; i++)
+    {
+        systemCallVector[i] = nullsys;
+    }
 }
 
 /* an error method to handle invalid syscalls */
@@ -459,4 +464,101 @@ static void cleanMailbox(int index)
     mailboxes[index].pSlotListHead = NULL;
     mailboxes[index].mbox_id = -1;
     mailboxes[index].waitingProcsHead = NULL;
+}
+
+
+/**************************************************************************
+   Name - clock_handler
+
+   Purpose - This function is used by the interrupt handler to create time slices for processes
+             and facilitate the round-robin with priority system for CPU time.
+
+   Note - Not sure exactly what the parameters are used for, since a lot of the interrupt handler is
+          hidden within libraries we can't access. Assume the parameters are needed, even if they
+          aren't used within the function.
+   *************************************************************************/
+static void clock_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs)
+{
+    static int count = 0;
+    int clock_result = 0;
+    int result = 0;
+    uint32_t clockMbox;
+
+    if (count == 4)
+    {
+        clockMbox = devices[THREADS_CLOCK_DEVICE_ID].deviceMbox;
+        mailbox_send(clockMbox, NULL, 0, 0);
+        count = 0;
+    }
+    else
+    {
+        count++;
+    }
+
+    time_slice();
+}
+
+
+static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs)
+{
+    LARGE_INTEGER unit;
+    int result;
+    int deviceId;
+
+    unit.QuadPart = (LONGLONG)device;
+    deviceId = unit.LowPart;
+    
+    if (deviceId >= THREADS_MAX_DEVICES)
+    {
+        console_output(false, "io_handler(): device id out of range.\n");
+        return;
+    }
+
+    result = mailbox_send(devices[deviceId].deviceMbox, &status, sizeof(int), false);
+
+    if (result == -1)
+    {
+        console_output(false, "io_handler(): invalid parameter passed to mailbox_receive(). Closing program.\n");
+        stop(1);
+    }
+    else if (result == -5)
+    {
+        console_output(false, "io_handler(): process signaled while waiting. Closing program.\n");
+        stop(1);
+    }
+}
+
+
+static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs)
+{
+    LARGE_INTEGER unit;
+    int deviceId;
+
+    unit.QuadPart = (LONGLONG)device;
+    deviceId = unit.LowPart;
+
+    if (deviceId >= THREADS_MAX_DEVICES)
+    {
+        console_output(false, "io_handler(): device id out of range.\n");
+        return;
+    }
+
+    if (pArgs != NULL)
+    {
+        system_call_arguments_t* pSysCallArgs = pArgs;
+
+        // if(pSysCallArgs->call_id == 7)
+
+        if (systemCallVector[pSysCallArgs->call_id] != NULL)
+        {
+            systemCallVector[pSysCallArgs->call_id](pArgs);
+        }
+    }
+}
+
+
+static void nullsys(system_call_arguments_t* args)
+{
+    console_output(false, "nullsys(): Invalid syscall %d. Closing program...\n", args->call_id);
+    stop(1);
 }

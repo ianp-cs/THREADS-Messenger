@@ -20,7 +20,6 @@ typedef struct mail_slot
    int				mbox_id;
    unsigned char	message[MAX_MESSAGE];
    int				messageSize;
-   /* other items as needed... */
 
 } MailSlot;
 
@@ -30,20 +29,18 @@ typedef struct waiting_process
    WaitingProcessPtr    pPrevProcess;
    int                  pid;
    int					index;
-   /* other items as needed... */
 } WaitingProcess;
 
 struct mailbox 
 {
-   SlotPtr      pSlotListHead;
-   int           mbox_id;
-   /* other items as needed... */
-   MAILBOX_TYPE      type;
-   MAILBOX_STATUS    status;
-   int               slotSize;
-   int               slotCount;
-   int				 fullSlots;			// Number of slots that have been filled with messages
-   WaitingProcessPtr waitingProcsHead;	// Pointer to the first process waiting on this mailbox
+   SlotPtr				pSlotListHead;
+   int					mbox_id;
+   MAILBOX_TYPE			type;
+   MAILBOX_STATUS		status;
+   int					slotSize;
+   int					slotCount;
+   int					fullSlots;			// Number of slots that have been filled with messages
+   WaitingProcessPtr	waitingProcsHead;	// Pointer to the first process waiting on this mailbox
 };
 
 
