@@ -20,6 +20,7 @@ typedef struct mail_slot
    int				mbox_id;
    unsigned char	message[MAX_MESSAGE];
    int				messageSize;
+   int				inUse;
 
 } MailSlot;
 

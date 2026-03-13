@@ -54,6 +54,8 @@ static void clock_handler_messaging(char* device, uint8_t command, uint32_t stat
 static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void nullsys(system_call_arguments_t* args);
+static MailSlot* findEmptySlot(int index);
+static void addWaitingProc(int index);
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -231,18 +233,61 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
 {
     checkKernelMode("mailbox_send");
 
-    int result = -1;
+    int index = findMbox(mboxId);
+    int exitCode;
 
+    // Input validation
 
+    if (index == -1)
+    {
+        console_output(false, "mailbox_send(): Mailbox ID is invalid.\n");
+        return -1;
+    }
 
-    return result;
+    if (msg_size > mailboxes[index].slotSize || msg_size < 0)
+    {
+        console_output(false, "mailbox_send(): Message size is invalid.\n");
+        return -1;
+    }
+
+    if (wait != 0 && wait != 1)
+    {
+        console_output(false, "mailbox_send(): Invalid block flag.\n");
+        return -1;
+    }
+
+    // Allocate mail slot
+    MailSlot* target = findEmptySlot(index);
+
+    if (target == NULL && wait == 0)
+    {
+        console_output(false, "mailbox_send(): No available mail slot to store message.\n");
+        return -2;
+    }
+    else if(target == NULL && wait == 1)
+    {
+        addWaitingProc(index);
+        block(BLOCKED_SEND);
+    }
+
+    // Save message
+    target->inUse = 1;
+    (mailboxes[index].fullSlots)++;
+    memcpy(target->message, pMsg, msg_size);
+
+    if (signaled())
+    {
+        return -5;
+    }
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------------
    Name - mailbox_receive
    Purpose - Receive a message from the indicated mailbox.
              Block the receiving process if no message available.
-   Parameters - mailbox id, pointer to buffer for msg, max size of buffer,
+   Parameters - mailbox id, pointer to buffter for msg, max size of buffer,
                 block flag.
    Returns - size of received msg (>=0) if successful, -1 if invalid args,
              -2 if would block (non-blocking mode), -5 if signaled.
@@ -562,3 +607,61 @@ static void nullsys(system_call_arguments_t* args)
     console_output(false, "nullsys(): Invalid syscall %d. Closing program...\n", args->call_id);
     stop(1);
 }
+
+static MailSlot* findEmptySlot(int index)
+{
+    if (mailboxes[index].fullSlots == mailboxes[index].slotCount)
+    {
+        return NULL;
+    }
+
+    MailSlot* currSlot = mailboxes[index].pSlotListHead;
+
+    while (currSlot != NULL)
+    {
+        if (currSlot->inUse == 0)
+        {
+            return currSlot;
+        }
+    }
+
+    console_print(false, "findEmptySlot(): fullSlots/slotCount mismatch.\n");
+
+    return NULL;
+}
+
+static void addWaitingProc(int index)
+{
+    int target = -1;
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if (waitingProcsTable[i].pid == 0)
+        {
+            target = i;
+            waitingProcsTable[target].pid = k_getpid();
+            waitingProcsTable[target].index = target;
+            break;
+        }
+    }
+
+    if (target == -1)
+    {
+        console_output(false, "addWaitingProc(): Waiting procedures table is full. Closing program...\n");
+        exit(1);
+    }
+
+    WaitingProcess* currProc = mailboxes[index].waitingProcsHead;
+
+    if (currProc != NULL)
+    {
+        while (currProc->pNextProcess != NULL)
+        {
+            currProc = currProc->pNextProcess;
+        }
+    }
+
+    currProc->pNextProcess = &waitingProcsTable[target];
+    currProc->pNextProcess->pPrevProcess = currProc;
+}
+
+
