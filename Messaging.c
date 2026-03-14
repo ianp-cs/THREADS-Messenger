@@ -53,7 +53,6 @@ static void cleanMailbox(int index);
 static void clock_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
-static void nullsys(system_call_arguments_t* args);
 static MailSlot* findEmptySlot(int index);
 static void addWaitingProc(int index, int code);
 static void removeWaitingProc(int index);
@@ -237,7 +236,6 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
     checkKernelMode("mailbox_send");
 
     int index = findMbox(mboxId);
-    int exitCode;
 
     // Input validation
 
@@ -306,7 +304,6 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     checkKernelMode("mailbox_receive");
 
     int index = findMbox(mboxId);
-    int exitCode;
 
     // Input validation
 
@@ -530,7 +527,7 @@ static void initializeAllDevices()
     for (int i = 0; i < THREADS_MAX_DEVICES - 1; i++)
     {
         strncpy_s(devices[i].deviceName, DEVICE_NAME_LEN, deviceNames[i], DEVICE_NAME_LEN);
-        devices[i].deviceHandle = device_initialize(devices[i].deviceName);
+        (uint32_t)devices[i].deviceHandle = device_initialize(devices[i].deviceName);
 
         if (devices[i].deviceHandle == -1)
         {
@@ -566,7 +563,7 @@ static void cleanMailbox(int index)
         slot->pNextSlot = NULL;
         slot->pPrevSlot = NULL;
         slot->mbox_id = -1;
-        strcpy(slot->message, "");
+        strcpy_s(slot->message, slot->messageSize, "");
         slot->messageSize = 0;
 
         slot = nextSlot;
@@ -668,13 +665,6 @@ static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t s
 }
 
 
-static void nullsys(system_call_arguments_t* args)
-{
-    console_output(false, "nullsys(): Invalid syscall %d. Closing program...\n", args->call_id);
-    stop(1);
-}
-
-
 static MailSlot* findEmptySlot(int index)
 {
     if (mailboxes[index].fullSlots == mailboxes[index].slotCount)
@@ -727,10 +717,14 @@ static void addWaitingProc(int index, int code)
         {
             currProc = currProc->pNextProcess;
         }
-    }
 
-    currProc->pNextProcess = &waitingProcsTable[target];
-    currProc->pNextProcess->pPrevProcess = currProc;
+        currProc->pNextProcess = &waitingProcsTable[target];
+        currProc->pNextProcess->pPrevProcess = currProc;
+    }
+    else
+    {
+        currProc = &waitingProcsTable[target];
+    }
 }
 
 
@@ -775,7 +769,7 @@ static void removeWaitingProc(int index)
 
 static void clearMailSlot(MailSlot* target, int index)
 {
-    strncpy(target->message, "", target->messageSize);
+    strcpy_s(target->message, target->messageSize, "");
     target->messageSize = 0;
     target->inUse = 0;
     (mailboxes[index].fullSlots)--;
