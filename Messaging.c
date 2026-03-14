@@ -283,6 +283,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
 
     // Save message
     target->inUse = 1;
+    target->messageSize = msg_size;
     (mailboxes[index].fullSlots)++;
     memcpy(target->message, pMsg, msg_size);
 
@@ -320,7 +321,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         return -1;
     }
 
-    if (msg_size > mailboxes[index].slotSize || msg_size < 0)
+    if (msg_size < 0)
     {
         console_output(false, "mailbox_receive(): Message size is invalid.\n");
         return -1;
@@ -359,6 +360,18 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         target = target->pNextSlot;
     }
 
+    // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
+    int count = 0;
+
+    for (int i = 0; i < msg_size; i++)
+    {
+        count++;
+        if ((target->message)[i] == '\0')
+        {
+            break;
+        }
+    }
+
     memcpy(pMsg, target->message, msg_size);
     clearMailSlot(target, index);
 
@@ -369,7 +382,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         return -5;
     }
 
-    return msg_size;
+    return count;
 }
 
 /* ------------------------------------------------------------------------
