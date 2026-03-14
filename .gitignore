@@ -5,9 +5,6 @@
 # Prerequisites
 *.d
 
-bin/
-.vs/
-
 # Object files
 *.o
 *.ko
@@ -66,3 +63,9 @@ modules.order
 Module.symvers
 Mkfile.old
 dkms.conf
+
+
+*.vs/
+bin/
+obj/
+

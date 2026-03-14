@@ -20,7 +20,7 @@
 
 #define DEVICE_NAME_LEN 16
 
-/* ------------------------- Prototypes ----------------------------------- */
+   /* ------------------------- Prototypes ----------------------------------- */
 static void nullsys(system_call_arguments_t* args);
 
 /* Note: interrupt_handler_t is already defined in THREADSLib.h with the signature:
@@ -56,6 +56,8 @@ static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t s
 static MailSlot* findEmptySlot(int index);
 static void addWaitingProc(int index, int code);
 static void removeWaitingProc(int index);
+static void createMailSlots(int index, int slotCount);
+static int findUnusedSlot();
 static void clearMailSlot(MailSlot* target, int index);
 static void unblockWaitingProc(int mbox_id, int code);
 
@@ -122,7 +124,7 @@ int SchedulerEntryPoint(void* arg)
         mailSlots[i].mbox_id = -1;
     }
 
-    
+
 
     /* Initialize the devices and their mailboxes. */
     /* Allocate mailboxes for use by the interrupt handlers.
@@ -130,12 +132,12 @@ int SchedulerEntryPoint(void* arg)
      * (disks, terminals) need slotted mailboxes since their interrupt
      * handlers use non-blocking sends.
      */
-    // TODO: Create mailboxes for each device.
-    //   devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
-    //   devices[i].deviceMbox = mailbox_create(..., sizeof(int));
+     // TODO: Create mailboxes for each device.
+     //   devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
+     //   devices[i].deviceMbox = mailbox_create(..., sizeof(int));
     devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
 
-    for (int i = 0; i < THREADS_MAX_DEVICES; i++)
+    for (int i = 1; i < THREADS_MAX_DEVICES; i++)
     {
         devices[i].deviceMbox = mailbox_create(5, sizeof(int));
     }
@@ -200,6 +202,7 @@ int mailbox_create(int slots, int slot_size)
             mailboxes[i].slotCount = slots;
             mailboxes[i].slotSize = slot_size;
             mailboxes[i].status = MBSTATUS_EMPTY;
+            createMailSlots(i, slots);
 
             if (slots == 0)
             {
@@ -209,13 +212,17 @@ int mailbox_create(int slots, int slot_size)
             {
                 mailboxes[i].type = MB_MULTISLOT;
             }
+
+            break;
         }
     }
 
+    /*
     if (newId == -1)
     {
-        console_output(false, "mailbox_create(): Failed to create mailbox, there is no room for more mailboxes.\n");
+        console_output(true, "mailbox_create(): Failed to create mailbox, there is no room for more mailboxes.\n");
     }
+    */
 
     return newId;
 } /* mailbox_create */
@@ -265,7 +272,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         console_output(false, "mailbox_send(): No available mail slot to store message.\n");
         return -2;
     }
-    else if(target == NULL && wait == 1)
+    else if (target == NULL && wait == 1)
     {
         addWaitingProc(index, BLOCKED_SEND);
         block(BLOCKED_SEND);
@@ -493,7 +500,7 @@ static void InitializeHandlers()
 /* an error method to handle invalid syscalls */
 static void nullsys(system_call_arguments_t* args)
 {
-    console_output(FALSE,"nullsys(): Invalid syscall %d. Halting...\n", args->call_id);
+    console_output(FALSE, "nullsys(): Invalid syscall %d. Halting...\n", args->call_id);
     stop(1);
 } /* nullsys */
 
@@ -521,8 +528,8 @@ static void initializeAllDevices()
 {
     checkKernelMode("initializeAllDevices");
 
-    char* deviceNames[THREADS_MAX_DEVICES - 1] = 
-        {"clock", "disk0", "disk1", "term0", "term1", "term2", "term3" };
+    char* deviceNames[THREADS_MAX_DEVICES - 1] =
+    { "clock", "disk0", "disk1", "term0", "term1", "term2", "term3" };
 
     for (int i = 0; i < THREADS_MAX_DEVICES - 1; i++)
     {
@@ -615,7 +622,7 @@ static void io_handler_messaging(char* device, uint8_t command, uint32_t status,
 
     unit.QuadPart = (LONGLONG)device;
     deviceId = unit.LowPart;
-    
+
     if (deviceId >= THREADS_MAX_DEVICES)
     {
         console_output(false, "io_handler(): device id out of range.\n");
@@ -682,7 +689,7 @@ static MailSlot* findEmptySlot(int index)
         }
     }
 
-    console_print(false, "findEmptySlot(): fullSlots/slotCount mismatch.\n");
+    console_output(false, "findEmptySlot(): fullSlots/slotCount mismatch.\n");
 
     return NULL;
 }
@@ -764,6 +771,47 @@ static void removeWaitingProc(int index)
     target->pid = 0;
     target->index = -1;
     target->blockedCode = 0;
+}
+
+
+static void createMailSlots(int index, int slotCount)
+{
+    if (slotCount == 0)
+    {
+        return;
+    }
+
+    int slotIndex = findUnusedSlot();
+
+    mailSlots[slotIndex].mbox_id = mailboxes[index].mbox_id;
+    mailboxes[index].pSlotListHead = &mailSlots[slotIndex];
+    MailSlot* prevSlot = &mailSlots[slotIndex];
+
+    for (int i = 1; i < slotCount; i++)
+    {
+        slotIndex = findUnusedSlot();
+
+        mailSlots[slotIndex].mbox_id = mailboxes[index].mbox_id;
+        prevSlot->pNextSlot = &mailSlots[slotIndex];
+        mailSlots[slotIndex].pPrevSlot = prevSlot;
+
+        prevSlot = prevSlot->pNextSlot;
+    }
+}
+
+
+static int findUnusedSlot()
+{
+    for (int i = 0; i < MAXSLOTS; i++)
+    {
+        if (mailSlots[i].mbox_id == -1)
+        {
+            return i;
+        }
+    }
+
+    console_output(false, "findUnusedSlot(): No available mail slots in table.\n");
+    return -1;
 }
 
 
