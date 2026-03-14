@@ -55,7 +55,10 @@ static void io_handler_messaging(char* device, uint8_t command, uint32_t status,
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void nullsys(system_call_arguments_t* args);
 static MailSlot* findEmptySlot(int index);
-static void addWaitingProc(int index);
+static void addWaitingProc(int index, int code);
+static void removeWaitingProc(int index);
+static void clearMailSlot(MailSlot* target, int index);
+static void unblockWaitingProc(int mbox_id, int code);
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -266,14 +269,19 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
     }
     else if(target == NULL && wait == 1)
     {
-        addWaitingProc(index);
+        addWaitingProc(index, BLOCKED_SEND);
         block(BLOCKED_SEND);
+        removeWaitingProc(index);
+
+        target = findEmptySlot(index);
     }
 
     // Save message
     target->inUse = 1;
     (mailboxes[index].fullSlots)++;
     memcpy(target->message, pMsg, msg_size);
+
+    unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
 
     if (signaled())
     {
@@ -287,7 +295,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
    Name - mailbox_receive
    Purpose - Receive a message from the indicated mailbox.
              Block the receiving process if no message available.
-   Parameters - mailbox id, pointer to buffter for msg, max size of buffer,
+   Parameters - mailbox id, pointer to buffer for msg, max size of buffer,
                 block flag.
    Returns - size of received msg (>=0) if successful, -1 if invalid args,
              -2 if would block (non-blocking mode), -5 if signaled.
@@ -297,9 +305,67 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
 {
     checkKernelMode("mailbox_receive");
 
-    int result = -1;
+    int index = findMbox(mboxId);
+    int exitCode;
 
-    return result;
+    // Input validation
+
+    if (index == -1)
+    {
+        console_output(false, "mailbox_receive(): Mailbox ID is invalid.\n");
+        return -1;
+    }
+
+    if (msg_size > mailboxes[index].slotSize || msg_size < 0)
+    {
+        console_output(false, "mailbox_receive(): Message size is invalid.\n");
+        return -1;
+    }
+
+    if (wait != 0 && wait != 1)
+    {
+        console_output(false, "mailbox_receive(): Invalid block flag.\n");
+        return -1;
+    }
+
+    // Check for mail. 
+
+    // Mailbox is empty and blocking mode is off
+    if (mailboxes[index].fullSlots == 0 && wait == 0)
+    {
+        return -2;
+    }
+    else if (mailboxes[index].fullSlots == 0 && wait == 1)
+    {
+        addWaitingProc(index, BLOCKED_RECEIVE);
+        block(BLOCKED_RECEIVE);
+        removeWaitingProc(index);
+    }
+
+    // Mailbox has mail
+    MailSlot* target = mailboxes[index].pSlotListHead;
+
+    for (int i = 0; i < mailboxes[index].fullSlots; i++)
+    {
+        if (target->inUse == 1)
+        {
+            break;
+        }
+
+        target = target->pNextSlot;
+    }
+
+    memcpy(pMsg, target->message, msg_size);
+    clearMailSlot(target, index);
+
+    unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+
+    if (signaled())
+    {
+        return -5;
+    }
+
+    return msg_size;
 }
 
 /* ------------------------------------------------------------------------
@@ -608,6 +674,7 @@ static void nullsys(system_call_arguments_t* args)
     stop(1);
 }
 
+
 static MailSlot* findEmptySlot(int index)
 {
     if (mailboxes[index].fullSlots == mailboxes[index].slotCount)
@@ -630,7 +697,8 @@ static MailSlot* findEmptySlot(int index)
     return NULL;
 }
 
-static void addWaitingProc(int index)
+
+static void addWaitingProc(int index, int code)
 {
     int target = -1;
     for (int i = 0; i < MAX_PROCESSES; i++)
@@ -640,6 +708,7 @@ static void addWaitingProc(int index)
             target = i;
             waitingProcsTable[target].pid = k_getpid();
             waitingProcsTable[target].index = target;
+            waitingProcsTable[target].blockedCode = code;
             break;
         }
     }
@@ -665,3 +734,68 @@ static void addWaitingProc(int index)
 }
 
 
+static void removeWaitingProc(int index)
+{
+    WaitingProcess* target = mailboxes[index].waitingProcsHead;
+
+    while (target->pid != k_getpid())
+    {
+        target = target->pNextProcess;
+
+        if (target == NULL)
+        {
+            console_output(false, "removeWaitingProc(): Couldn't find current process in the table. Closing program...\n");
+            exit(1);
+        }
+    }
+
+    // Target is head of waiting processes list
+    if (target->pPrevProcess == NULL)
+    {
+        if (target->pNextProcess == NULL)
+        {
+            mailboxes[index].waitingProcsHead = NULL;
+        }
+        else
+        {
+            mailboxes[index].waitingProcsHead = target->pNextProcess;
+        }
+    }
+    // Target is not the head of the waiting processes list
+    else
+    {
+        target->pPrevProcess->pNextProcess = target->pNextProcess;
+    }
+
+    target->pid = 0;
+    target->index = -1;
+    target->blockedCode = 0;
+}
+
+
+static void clearMailSlot(MailSlot* target, int index)
+{
+    strncpy(target->message, "", target->messageSize);
+    target->messageSize = 0;
+    target->inUse = 0;
+    (mailboxes[index].fullSlots)--;
+}
+
+
+static void unblockWaitingProc(int mbox_id, int code)
+{
+    int index = findMbox(mbox_id);
+
+    WaitingProcess* target = mailboxes[index].waitingProcsHead;
+
+    while (target != NULL)
+    {
+        if (target->blockedCode == code)
+        {
+            unblock(target->pid);
+            return;
+        }
+
+        target = target->pNextProcess;
+    }
+}

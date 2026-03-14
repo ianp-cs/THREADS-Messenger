@@ -28,6 +28,7 @@ typedef struct waiting_process
 {
    WaitingProcessPtr    pNextProcess;
    WaitingProcessPtr    pPrevProcess;
+   int					blockedCode;
    int                  pid;
    int					index;
 } WaitingProcess;
