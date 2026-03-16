@@ -269,7 +269,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
 
     if (target == NULL && wait == 0)
     {
-        console_output(false, "mailbox_send(): No available mail slot to store message.\n");
+        // console_output(false, "mailbox_send(): No available mail slot to store message.\n");
         return -2;
     }
     else if (target == NULL && wait == 1)
@@ -743,7 +743,7 @@ static void addWaitingProc(int index, int code)
     }
     else
     {
-        currProc = &waitingProcsTable[target];
+        mailboxes[index].waitingProcsHead = &waitingProcsTable[target];
     }
 }
 
