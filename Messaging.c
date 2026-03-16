@@ -60,6 +60,7 @@ static void createMailSlots(int index, int slotCount);
 static int findUnusedSlot();
 static void clearMailSlot(MailSlot* target, int index);
 static void unblockWaitingProc(int mbox_id, int code);
+static void reorderMailSlots(int index);
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -340,6 +341,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     {
         return -2;
     }
+    // Mailbox is empty and blocking mode is on
     else if (mailboxes[index].fullSlots == 0 && wait == 1)
     {
         addWaitingProc(index, BLOCKED_RECEIVE);
@@ -350,15 +352,13 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     // Mailbox has mail
     MailSlot* target = mailboxes[index].pSlotListHead;
 
-    for (int i = 0; i < mailboxes[index].fullSlots; i++)
+    // This shouldn't be needed, first slot should always be full if the mailbox is not empty
+    /*
+    while(target->inUse == 0)
     {
-        if (target->inUse == 1)
-        {
-            break;
-        }
-
         target = target->pNextSlot;
     }
+    */
 
     // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
     int count = 0;
@@ -374,7 +374,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
 
     memcpy(pMsg, target->message, msg_size);
     clearMailSlot(target, index);
-
+    reorderMailSlots(index);
     unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
 
     if (signaled())
@@ -700,6 +700,8 @@ static MailSlot* findEmptySlot(int index)
         {
             return currSlot;
         }
+
+        currSlot = currSlot->pNextSlot;
     }
 
     console_output(false, "findEmptySlot(): fullSlots/slotCount mismatch.\n");
@@ -853,4 +855,31 @@ static void unblockWaitingProc(int mbox_id, int code)
 
         target = target->pNextProcess;
     }
+}
+
+
+static void reorderMailSlots(int index)
+{
+    // No need to reorder if the mailbox only has 0 or 1 available slots
+    if (mailboxes[index].slotCount <= 1)
+    {
+        return;
+    }
+
+    // Find last mail slot in linked list
+    MailSlot* lastSlot = mailboxes[index].pSlotListHead;
+
+    while (lastSlot->pNextSlot != NULL)
+    {
+        lastSlot = lastSlot->pNextSlot;
+    }
+
+    // Attach current head to end of linked list
+    lastSlot->pNextSlot = mailboxes[index].pSlotListHead;
+
+    // Make second slot in linked list the new head
+    mailboxes[index].pSlotListHead = mailboxes[index].pSlotListHead->pNextSlot;
+
+    // Detach new last slot from new head slot
+    lastSlot->pNextSlot->pNextSlot = NULL;
 }
