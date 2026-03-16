@@ -282,6 +282,11 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         target = findEmptySlot(index);
     }
 
+    if (signaled())
+    {
+        return -5;
+    }
+
     // Save message
     target->inUse = 1;
     target->messageSize = msg_size;
@@ -289,11 +294,6 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
     memcpy(target->message, pMsg, msg_size);
 
     unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
-
-    if (signaled())
-    {
-        return -5;
-    }
 
     return 0;
 }
@@ -409,24 +409,18 @@ int mailbox_free(int mboxId)
 
     while (proc != NULL)
     {
+        WaitingProcess* nextProc = proc->pNextProcess;
+
         // Tell waiting process to terminate and unblock it
         k_kill(proc->pid, SIG_TERM);
         unblock(proc->pid);
-
-        // Clean up the process in the process table
-        WaitingProcess* nextProc = proc->pNextProcess;
-
-        proc->pid = -1;
-        proc->pNextProcess = NULL;
-        proc->pPrevProcess = NULL;
-        proc->index = -1;
 
         proc = nextProc;
     }
 
     cleanMailbox(index);
 
-    // Process signaled while waiting closing mbox
+    // Process signaled while closing mbox
     if (signaled())
     {
         return -5;
@@ -775,17 +769,22 @@ static void removeWaitingProc(int index)
         else
         {
             mailboxes[index].waitingProcsHead = target->pNextProcess;
+            target->pNextProcess->pPrevProcess = NULL;
         }
     }
     // Target is not the head of the waiting processes list
     else
     {
         target->pPrevProcess->pNextProcess = target->pNextProcess;
+        target->pNextProcess->pPrevProcess = target->pPrevProcess;
     }
 
+    // Clean up target
     target->pid = 0;
     target->index = -1;
     target->blockedCode = 0;
+    target->pNextProcess = NULL;
+    target->pPrevProcess = NULL;
 }
 
 
