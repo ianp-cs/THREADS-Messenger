@@ -265,40 +265,69 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         return -1;
     }
 
-    // Allocate mail slot
-    MailSlot* target = findEmptySlot(index);
+    // Mailbox is a zero slot mailbox
+    if (mailboxes[index].slotCount == 0)
+    {
+        if (mailboxes[index].waitingProcsHead == NULL)
+        {
+            addWaitingProc(index, BLOCKED_SEND);
+            block(BLOCKED_SEND);
 
-    if (target == NULL && wait == 0)
-    {
-        // console_output(false, "mailbox_send(): No available mail slot to store message.\n");
-        return -2;
+            if (signaled())
+            {
+                return -5;
+            }
+
+            removeWaitingProc(index);
+        }
+        else
+        {
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
+        }
+
+        if (signaled())
+        {
+            return -5;
+        }
     }
-    else if (target == NULL && wait == 1)
+    // Mailbox has slots
+    else
     {
-        addWaitingProc(index, BLOCKED_SEND);
-        block(BLOCKED_SEND);
+        // Allocate mail slot
+        MailSlot* target = findEmptySlot(index);
+
+        if (target == NULL && wait == 0)
+        {
+            // console_output(false, "mailbox_send(): No available mail slot to store message.\n");
+            return -2;
+        }
+        else if (target == NULL && wait == 1)
+        {
+            addWaitingProc(index, BLOCKED_SEND);
+            block(BLOCKED_SEND);
+
+            if (signaled())
+            {
+                return -5;
+            }
+
+            removeWaitingProc(index);
+            target = findEmptySlot(index);
+        }
 
         if (signaled())
         {
             return -5;
         }
 
-        removeWaitingProc(index);
-        target = findEmptySlot(index);
+        // Save message
+        target->inUse = 1;
+        target->messageSize = msg_size;
+        (mailboxes[index].fullSlots)++;
+        memcpy(target->message, pMsg, msg_size);
+
+        unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
     }
-
-    if (signaled())
-    {
-        return -5;
-    }
-
-    // Save message
-    target->inUse = 1;
-    target->messageSize = msg_size;
-    (mailboxes[index].fullSlots)++;
-    memcpy(target->message, pMsg, msg_size);
-
-    unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
 
     return 0;
 }
@@ -318,6 +347,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     checkKernelMode("mailbox_receive");
 
     int index = findMbox(mboxId);
+    int count = 0;
 
     // Input validation
 
@@ -339,59 +369,84 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         return -1;
     }
 
-    // Check for mail. 
+    // This is a zero slot mailbox
+    if (mailboxes[index].slotCount == 0)
+    {
+        if (mailboxes[index].waitingProcsHead == NULL)
+        {
+            addWaitingProc(index, BLOCKED_RECEIVE);
+            block(BLOCKED_RECEIVE);
 
-    // Mailbox is empty and blocking mode is off
-    if (mailboxes[index].fullSlots == 0 && wait == 0)
-    {
-        return -2;
+            if (signaled())
+            {
+                return -5;
+            }
+
+            removeWaitingProc(index);
+        }
+        else
+        {
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND);
+        }
+
+        if (signaled())
+        {
+            return -5;
+        }
     }
-    // Mailbox is empty and blocking mode is on
-    else if (mailboxes[index].fullSlots == 0 && wait == 1)
-    {
-        addWaitingProc(index, BLOCKED_RECEIVE);
-        block(BLOCKED_RECEIVE);
+    // The mailbox has slots
+    else {
+        // Check for mail. 
+        // Mailbox is empty and blocking mode is off
+        if (mailboxes[index].fullSlots == 0 && wait == 0)
+        {
+            return -2;
+        }
+        // Mailbox is empty and blocking mode is on
+        else if (mailboxes[index].fullSlots == 0 && wait == 1)
+        {
+            addWaitingProc(index, BLOCKED_RECEIVE);
+            block(BLOCKED_RECEIVE);
+
+            if (signaled())
+            {
+                return -5;
+            }
+
+            removeWaitingProc(index);
+        }
 
         if (signaled())
         {
             return -5;
         }
 
-        removeWaitingProc(index);
-    }
+        // Mailbox has mail
+        MailSlot* target = mailboxes[index].pSlotListHead;
 
-    if (signaled())
-    {
-        return -5;
-    }
-
-    // Mailbox has mail
-    MailSlot* target = mailboxes[index].pSlotListHead;
-
-    // This shouldn't be needed, first slot should always be full if the mailbox is not empty
-    /*
-    while(target->inUse == 0)
-    {
-        target = target->pNextSlot;
-    }
-    */
-
-    // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
-    int count = 0;
-
-    for (int i = 0; i < msg_size; i++)
-    {
-        count++;
-        if ((target->message)[i] == '\0')
+        // This shouldn't be needed, first slot should always be full if the mailbox is not empty
+        /*
+        while(target->inUse == 0)
         {
-            break;
+            target = target->pNextSlot;
         }
-    }
+        */
 
-    memcpy(pMsg, target->message, msg_size);
-    clearMailSlot(target, index);
-    reorderMailSlots(index);
-    unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+        // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
+        for (int i = 0; i < msg_size; i++)
+        {
+            count++;
+            if ((target->message)[i] == '\0')
+            {
+                break;
+            }
+        }
+
+        memcpy(pMsg, target->message, msg_size);
+        clearMailSlot(target, index);
+        reorderMailSlots(index);
+        unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+    }
 
     return count;
 }
