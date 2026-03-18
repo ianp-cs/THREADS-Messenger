@@ -277,8 +277,13 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
     {
         addWaitingProc(index, BLOCKED_SEND);
         block(BLOCKED_SEND);
-        removeWaitingProc(index);
 
+        if (signaled())
+        {
+            return -5;
+        }
+
+        removeWaitingProc(index);
         target = findEmptySlot(index);
     }
 
@@ -346,7 +351,18 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     {
         addWaitingProc(index, BLOCKED_RECEIVE);
         block(BLOCKED_RECEIVE);
+
+        if (signaled())
+        {
+            return -5;
+        }
+
         removeWaitingProc(index);
+    }
+
+    if (signaled())
+    {
+        return -5;
     }
 
     // Mailbox has mail
@@ -376,11 +392,6 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     clearMailSlot(target, index);
     reorderMailSlots(index);
     unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
-
-    if (signaled())
-    {
-        return -5;
-    }
 
     return count;
 }
@@ -414,6 +425,12 @@ int mailbox_free(int mboxId)
         // Tell waiting process to terminate and unblock it
         k_kill(proc->pid, SIG_TERM);
         unblock(proc->pid);
+
+        proc->pid = 0;
+        proc->index = -1;
+        proc->blockedCode = 0;
+        proc->pNextProcess = NULL;
+        proc->pPrevProcess = NULL;
 
         proc = nextProc;
     }
