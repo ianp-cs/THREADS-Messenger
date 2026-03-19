@@ -55,7 +55,7 @@ static void clock_handler_messaging(char* device, uint8_t command, uint32_t stat
 static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static MailSlot* findEmptySlot(int index);
-static void addWaitingProc(int index, int code);
+static void addWaitingProc(int index, int code, void* pMsg, int msg_size);
 static void removeWaitingProc(int index);
 static void createMailSlots(int index, int slotCount);
 static int findUnusedSlot();
@@ -291,12 +291,14 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         else if (mailboxes[index].waitingProcsHead == NULL ||
             mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_RECEIVE)
         {
-            addWaitingProc(index, BLOCKED_SEND);
+            addWaitingProc(index, BLOCKED_SEND, pMsg, msg_size);
             block(BLOCKED_SEND);
             removeWaitingProc(index);
         }
         else
         {
+            memcpy(mailboxes[index].waitingProcsHead->message, pMsg, msg_size);
+            mailboxes[index].waitingProcsHead->messageSize = msg_size;
             unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
         }
     }
@@ -313,19 +315,22 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         }
         else if (target == NULL && wait == 1)
         {
-            addWaitingProc(index, BLOCKED_SEND);
+            addWaitingProc(index, BLOCKED_SEND, NULL, 0);
             block(BLOCKED_SEND);
             removeWaitingProc(index);
             target = findEmptySlot(index);
         }
 
         // Save message
-        target->inUse = 1;
-        target->messageSize = msg_size;
-        (mailboxes[index].fullSlots)++;
-        memcpy(target->message, pMsg, msg_size);
+        if (target != NULL)
+        {
+            target->inUse = 1;
+            target->messageSize = msg_size;
+            (mailboxes[index].fullSlots)++;
+            memcpy(target->message, pMsg, msg_size);
 
-        unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
+            unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
+        }
     }
 
     if (signaled())
@@ -395,12 +400,24 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         else if (mailboxes[index].waitingProcsHead == NULL
             || mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_SEND)
         {
-            addWaitingProc(index, BLOCKED_RECEIVE);
+            addWaitingProc(index, BLOCKED_RECEIVE, NULL, 0);
             block(BLOCKED_RECEIVE);
             removeWaitingProc(index);
         }
         else
         {
+            memcpy(pMsg, mailboxes[index].waitingProcsHead->message, msg_size);
+
+            // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
+            for (int i = 0; i < msg_size; i++)
+            {
+                count++;
+                if ((mailboxes[index].waitingProcsHead->message)[i] == '\0')
+                {
+                    break;
+                }
+            }
+
             unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND);
         }
     }
@@ -415,7 +432,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         // Mailbox is empty and blocking mode is on
         else if (mailboxes[index].fullSlots == 0 && wait == 1)
         {
-            addWaitingProc(index, BLOCKED_RECEIVE);
+            addWaitingProc(index, BLOCKED_RECEIVE, NULL, 0);
             block(BLOCKED_RECEIVE);
             removeWaitingProc(index);
         }
@@ -497,6 +514,8 @@ int mailbox_free(int mboxId)
         proc->pid = 0;
         proc->index = -1;
         proc->blockedCode = 0;
+        proc->messageSize = 0;
+        strcpy_s(proc->message, proc->messageSize, "");
         proc->pNextProcess = NULL;
         proc->pPrevProcess = NULL;
 
@@ -807,7 +826,7 @@ static MailSlot* findEmptySlot(int index)
 }
 
 
-static void addWaitingProc(int index, int code)
+static void addWaitingProc(int index, int code, void* pMsg, int msg_size)
 {
     int target = -1;
     for (int i = 0; i < MAX_PROCESSES; i++)
@@ -818,6 +837,8 @@ static void addWaitingProc(int index, int code)
             waitingProcsTable[target].pid = k_getpid();
             waitingProcsTable[target].index = target;
             waitingProcsTable[target].blockedCode = code;
+            memcpy(waitingProcsTable[target].message, pMsg, msg_size);
+            waitingProcsTable[target].messageSize = msg_size;
             break;
         }
     }
@@ -901,6 +922,8 @@ static void removeWaitingProc(int index)
     target->pid = 0;
     target->index = -1;
     target->blockedCode = 0;
+    target->messageSize = 0;
+    strcpy_s(target->message, sizeof(target->message), "");
     target->pNextProcess = NULL;
     target->pPrevProcess = NULL;
 

@@ -31,6 +31,8 @@ typedef struct waiting_process
    int					blockedCode;
    int                  pid;
    int					index;
+   unsigned char		message[MAX_MESSAGE];	// Used in zero slot mailboxes to send a direct message
+   int					messageSize;
 } WaitingProcess;
 
 struct mailbox 
@@ -41,10 +43,10 @@ struct mailbox
    MAILBOX_STATUS		status;
    int					slotSize;
    int					slotCount;
-   int					fullSlots;			// Number of slots that have been filled with messages
-   WaitingProcessPtr	waitingProcsHead;	// Pointer to the first process waiting on this mailbox
-   int					waitingProcsCount;	// Number of waiting processes, excluding the freeProc
-   WaitingProcessPtr	freeProc;			// Pointer to the process in charge of freeing this mailbox
+   int					fullSlots;				// Number of slots that have been filled with messages
+   WaitingProcessPtr	waitingProcsHead;		// Pointer to the first process waiting on this mailbox
+   int					waitingProcsCount;		// Number of waiting processes, excluding the freeProc
+   WaitingProcessPtr	freeProc;				// Pointer to the process in charge of freeing this mailbox
 };
 
 
