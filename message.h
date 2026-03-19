@@ -43,10 +43,11 @@ struct mailbox
    MAILBOX_STATUS		status;
    int					slotSize;
    int					slotCount;
-   int					fullSlots;				// Number of slots that have been filled with messages
-   WaitingProcessPtr	waitingProcsHead;		// Pointer to the first process waiting on this mailbox
-   int					waitingProcsCount;		// Number of waiting processes, excluding the freeProc
-   WaitingProcessPtr	freeProc;				// Pointer to the process in charge of freeing this mailbox
+   int					fullSlots;						// Number of slots that have been filled with messages
+   WaitingProcessPtr	waitingProcsHead;				// Pointer to the first process waiting on this mailbox
+   int					waitingProcsCount;				// Number of waiting processes, excluding the freeProc
+   int					unblockQueue[MAX_PROCESSES];	// An array containing the indices of waiting procs queued to be unblocked
+   WaitingProcessPtr	freeProc;						// Pointer to the process in charge of freeing this mailbox
 };
 
 

@@ -56,13 +56,16 @@ static void io_handler_messaging(char* device, uint8_t command, uint32_t status,
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static MailSlot* findEmptySlot(int index);
 static void addWaitingProc(int index, int code, void* pMsg, int msg_size);
-static void removeWaitingProc(int index);
+static int removeWaitingProc(int index);
 static void createMailSlots(int index, int slotCount);
 static int findUnusedSlot();
 static void clearMailSlot(MailSlot* target, int index);
 static void unblockWaitingProc(int mbox_id, int code);
-static void reorderMailSlots(int index);
+static void reorderMailSlots(MailSlot* target, int index);
 static WaitingProcessPtr addFreeProc(int index);
+static void addToUnblockQueue(int index, int pid);
+static void removeFromUnblockQueue(int index, int pid);
+static bool isInUnblockQueue(int index, int pid);
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -402,6 +405,19 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_RECEIVE, NULL, 0);
             block(BLOCKED_RECEIVE);
+
+            memcpy(pMsg, mailboxes[index].waitingProcsHead->message, msg_size);
+
+            // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
+            for (int i = 0; i < msg_size; i++)
+            {
+                count++;
+                if ((mailboxes[index].waitingProcsHead->message)[i] == '\0')
+                {
+                    break;
+                }
+            }
+
             removeWaitingProc(index);
         }
         else
@@ -434,34 +450,31 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_RECEIVE, NULL, 0);
             block(BLOCKED_RECEIVE);
-            removeWaitingProc(index);
-        }
+            int waitingProcIndex = removeWaitingProc(index);
 
-        // Mailbox has mail
-        MailSlot* target = mailboxes[index].pSlotListHead;
+            // Find correct mail slot based on waitingProc index
+            MailSlot* target = mailboxes[index].pSlotListHead;
 
-        // This shouldn't be needed, first slot should always be full if the mailbox is not empty
-        /*
-        while(target->inUse == 0)
-        {
-            target = target->pNextSlot;
-        }
-        */
-
-        // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
-        for (int i = 0; i < msg_size; i++)
-        {
-            count++;
-            if ((target->message)[i] == '\0')
+            for (int i = 0; i < waitingProcIndex; i++)
             {
-                break;
+                target = target->pNextSlot;
             }
-        }
 
-        memcpy(pMsg, target->message, msg_size);
-        clearMailSlot(target, index);
-        reorderMailSlots(index);
-        unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+            // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
+            for (int i = 0; i < msg_size; i++)
+            {
+                count++;
+                if ((target->message)[i] == '\0')
+                {
+                    break;
+                }
+            }
+
+            memcpy(pMsg, target->message, msg_size);
+            clearMailSlot(target, index);
+            reorderMailSlots(target, index);
+            unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+        }
     }
 
     if (signaled())
@@ -870,14 +883,16 @@ static void addWaitingProc(int index, int code, void* pMsg, int msg_size)
 }
 
 
-static void removeWaitingProc(int index)
+static int removeWaitingProc(int index)
 {
+    disableInterrupts();
     if (signaled())
     {
         return;
     }
 
     WaitingProcess* target = mailboxes[index].waitingProcsHead;
+    int waitingProcIndex = 0;
 
     if (target == NULL)
     {
@@ -898,6 +913,8 @@ static void removeWaitingProc(int index)
         }
     }
 
+    waitingProcIndex = target->index;
+
     // Target is head of waiting processes list
     if (target->pPrevProcess == NULL)
     {
@@ -915,8 +932,23 @@ static void removeWaitingProc(int index)
     else
     {
         target->pPrevProcess->pNextProcess = target->pNextProcess;
-        target->pNextProcess->pPrevProcess = target->pPrevProcess;
+
+        if (target->pNextProcess != NULL)
+        {
+            target->pNextProcess->pPrevProcess = target->pPrevProcess;
+        }
     }
+
+    WaitingProcessPtr curr = mailboxes[index].waitingProcsHead;
+
+    // Adjust waiting proc indices
+    for (int i = 0; curr != NULL; i++)
+    {
+        curr->index = i;
+        curr = curr->pNextProcess;
+    }
+
+    removeFromUnblockQueue(index, target->pid);
 
     // Clean up target
     target->pid = 0;
@@ -928,6 +960,9 @@ static void removeWaitingProc(int index)
     target->pPrevProcess = NULL;
 
     (mailboxes[index].waitingProcsCount)--;
+    enableInterrupts();
+
+    return waitingProcIndex;
 }
 
 
@@ -989,8 +1024,9 @@ static void unblockWaitingProc(int mbox_id, int code)
 
     while (target != NULL)
     {
-        if (target->blockedCode == code)
+        if (target->blockedCode == code && !isInUnblockQueue(index, target->pid))
         {
+            addToUnblockQueue(index, target->pid);
             unblock(target->pid);
             return;
         }
@@ -1000,7 +1036,7 @@ static void unblockWaitingProc(int mbox_id, int code)
 }
 
 
-static void reorderMailSlots(int index)
+static void reorderMailSlots(MailSlot* target, int index)
 {
     // No need to reorder if the mailbox only has 0 or 1 available slots
     if (mailboxes[index].slotCount <= 1)
@@ -1008,7 +1044,7 @@ static void reorderMailSlots(int index)
         return;
     }
 
-    // Find last mail slot in linked list
+    // Find last slot
     MailSlot* lastSlot = mailboxes[index].pSlotListHead;
 
     while (lastSlot->pNextSlot != NULL)
@@ -1016,14 +1052,28 @@ static void reorderMailSlots(int index)
         lastSlot = lastSlot->pNextSlot;
     }
 
-    // Attach current head to end of linked list
-    lastSlot->pNextSlot = mailboxes[index].pSlotListHead;
 
-    // Make second slot in linked list the new head
-    mailboxes[index].pSlotListHead = mailboxes[index].pSlotListHead->pNextSlot;
+    // target is the last slot in the list, no need to reorder
+    if (target == lastSlot)
+    {
+        return;
+    }
+    // target is the head of the mail slots list
+    else if (target == mailboxes[index].pSlotListHead)
+    {
+        mailboxes[index].pSlotListHead = target->pNextSlot;
+        mailboxes[index].pSlotListHead->pPrevSlot = NULL;
+    }
+    // Target is not at the head or tail of the list
+    else
+    {
+        target->pPrevSlot->pNextSlot = target->pNextSlot;
+        target->pNextSlot->pPrevSlot = target->pPrevSlot;
+    }
 
-    // Detach new last slot from new head slot
-    lastSlot->pNextSlot->pNextSlot = NULL;
+    lastSlot->pNextSlot = target;
+    target->pPrevSlot = lastSlot;
+    target->pNextSlot = NULL;
 }
 
 
@@ -1055,4 +1105,53 @@ static WaitingProcessPtr addFreeProc(int index)
     }
 
     return &waitingProcsTable[target];
+}
+
+
+static void addToUnblockQueue(int index, int pid)
+{
+    if (isInUnblockQueue(index, pid))
+    {
+        console_output(false, "addToUnblockQueue(): Attemped to add pid that is already in the queue.\n");
+        return;
+    }
+
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if ((mailboxes[index].unblockQueue)[i] == 0)
+        {
+            (mailboxes[index].unblockQueue)[i] = pid;
+            return;
+        }
+    }
+}
+
+
+static void removeFromUnblockQueue(int index, int pid)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if ((mailboxes[index].unblockQueue)[i] == pid)
+        {
+            (mailboxes[index].unblockQueue)[i] = 0;
+            return;
+        }
+    }
+
+    console_output(false, "removeFromUnblockQueue(): Pid %d not in the queue.\n", pid);
+    return;
+}
+
+
+static bool isInUnblockQueue(int index, int pid)
+{
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if (pid == (mailboxes[index].unblockQueue)[i])
+        {
+            return true;
+        }
+    }
+
+    return false;
 }
