@@ -300,6 +300,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
             unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
         }
     }
+    // The mailbox has slots
     else
     {
         // Allocate mail slot
@@ -318,19 +319,6 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
             target = findEmptySlot(index);
         }
 
-        if (signaled())
-        {
-            // If last waiting proc, unblock the freeing process
-            if (mailboxes[index].waitingProcsCount == 1)
-            {
-                unblock(mailboxes[index].freeProc->pid);
-            }
-
-            (mailboxes[index].waitingProcsCount)--;
-
-            return -5;
-        }
-
         // Save message
         target->inUse = 1;
         target->messageSize = msg_size;
@@ -338,6 +326,19 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         memcpy(target->message, pMsg, msg_size);
 
         unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
+    }
+
+    if (signaled())
+    {
+        // If last waiting proc, unblock the freeing process
+        if (mailboxes[index].waitingProcsCount == 1)
+        {
+            unblock(mailboxes[index].freeProc->pid);
+        }
+
+        (mailboxes[index].waitingProcsCount)--;
+
+        return -5;
     }
 
     return 0;
@@ -419,19 +420,6 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
             removeWaitingProc(index);
         }
 
-        if (signaled())
-        {
-            // If last waiting proc, unblock the freeing process
-            if (mailboxes[index].waitingProcsCount == 1)
-            {
-                unblock(mailboxes[index].freeProc->pid);
-            }
-
-            (mailboxes[index].waitingProcsCount)--;
-
-            return -5;
-        }
-
         // Mailbox has mail
         MailSlot* target = mailboxes[index].pSlotListHead;
 
@@ -457,6 +445,19 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         clearMailSlot(target, index);
         reorderMailSlots(index);
         unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+    }
+
+    if (signaled())
+    {
+        // If last waiting proc, unblock the freeing process
+        if (mailboxes[index].waitingProcsCount == 1)
+        {
+            unblock(mailboxes[index].freeProc->pid);
+        }
+
+        (mailboxes[index].waitingProcsCount)--;
+
+        return -5;
     }
 
     return count;
