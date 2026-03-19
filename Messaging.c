@@ -494,7 +494,10 @@ int mailbox_free(int mboxId)
         proc = nextProc;
     }
 
-    block(BLOCKED_RELEASE);
+    if (mailboxes[index].waitingProcsCount != 0)
+    {
+        block(BLOCKED_RELEASE);
+    }
     cleanMailbox(index);
 
     // Process signaled while closing mbox
