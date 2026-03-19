@@ -280,9 +280,13 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
     // Mailbox is a zero slot mailbox
     if (mailboxes[index].slotCount == 0)
     {
-        if (wait == 0)
+        if (wait == 0 && mailboxes[index].waitingProcsHead == NULL)
         {
             return -2;
+        }
+        else if (wait == 0 && mailboxes[index].waitingProcsHead != NULL)
+        {
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
         }
         else if (mailboxes[index].waitingProcsHead == NULL ||
             mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_RECEIVE)
@@ -379,9 +383,13 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     // This is a zero slot mailbox
     if (mailboxes[index].slotCount == 0)
     {
-        if (wait == 0)
+        if (wait == 0 && mailboxes[index].waitingProcsHead == NULL)
         {
             return -2;
+        }
+        else if (wait == 0 && mailboxes[index].waitingProcsHead != NULL)
+        {
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND);
         }
         else if (mailboxes[index].waitingProcsHead == NULL
             || mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_SEND)
