@@ -19,6 +19,7 @@
 
 
 #define DEVICE_NAME_LEN 16
+#define GLOBAL_SLOT_POOL_SIZE MAXSLOTS * 10
 
    /* ------------------------- Prototypes ----------------------------------- */
 static void nullsys(system_call_arguments_t* args);
@@ -61,6 +62,7 @@ static int findUnusedSlot();
 static void clearMailSlot(MailSlot* target, int index);
 static void unblockWaitingProc(int mbox_id, int code);
 static void reorderMailSlots(int index);
+static WaitingProcessPtr addFreeProc(int index);
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -73,7 +75,7 @@ void (*systemCallVector[THREADS_MAX_SYSCALLS])(system_call_arguments_t* args);
 
 /* the mail boxes */
 MailBox mailboxes[MAXMBOX];
-MailSlot mailSlots[MAXSLOTS];
+MailSlot mailSlots[GLOBAL_SLOT_POOL_SIZE];
 
 /* waiting process table */
 WaitingProcess waitingProcsTable[MAX_PROCESSES];
@@ -114,18 +116,22 @@ int SchedulerEntryPoint(void* arg)
     for (int i = 0; i < MAXMBOX; i++)
     {
         mailboxes[i].pSlotListHead = NULL;
+        mailboxes[i].fullSlots = 0;
+        mailboxes[i].slotCount = 0;
         mailboxes[i].mbox_id = -1;
         mailboxes[i].waitingProcsHead = NULL;
+        mailboxes[i].waitingProcsCount = 0;
+        mailboxes[i].freeProc = NULL;
     }
 
-    for (int i = 0; i < MAXSLOTS; i++)
+    for (int i = 0; i < GLOBAL_SLOT_POOL_SIZE; i++)
     {
         mailSlots[i].pNextSlot = NULL;
         mailSlots[i].pPrevSlot = NULL;
         mailSlots[i].mbox_id = -1;
+        mailSlots[i].inUse = 0;
+        mailSlots[i].messageSize = 0;
     }
-
-
 
     /* Initialize the devices and their mailboxes. */
     /* Allocate mailboxes for use by the interrupt handlers.
@@ -265,32 +271,31 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         return -1;
     }
 
+    if (mailboxes[index].fullSlots == MAXSLOTS)
+    {
+        console_output(false, "No mail slots available.\n");
+        stop(1);
+    }
+
     // Mailbox is a zero slot mailbox
     if (mailboxes[index].slotCount == 0)
     {
-        if (mailboxes[index].waitingProcsHead == NULL)
+        if (wait == 0)
+        {
+            return -2;
+        }
+        else if (mailboxes[index].waitingProcsHead == NULL ||
+            mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_RECEIVE)
         {
             addWaitingProc(index, BLOCKED_SEND);
             block(BLOCKED_SEND);
-
-            if (signaled())
-            {
-                return -5;
-            }
-
             removeWaitingProc(index);
         }
         else
         {
             unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
         }
-
-        if (signaled())
-        {
-            return -5;
-        }
     }
-    // Mailbox has slots
     else
     {
         // Allocate mail slot
@@ -305,18 +310,20 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_SEND);
             block(BLOCKED_SEND);
-
-            if (signaled())
-            {
-                return -5;
-            }
-
             removeWaitingProc(index);
             target = findEmptySlot(index);
         }
 
         if (signaled())
         {
+            // If last waiting proc, unblock the freeing process
+            if (mailboxes[index].waitingProcsCount == 1)
+            {
+                unblock(mailboxes[index].freeProc->pid);
+            }
+
+            (mailboxes[index].waitingProcsCount)--;
+
             return -5;
         }
 
@@ -372,26 +379,20 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
     // This is a zero slot mailbox
     if (mailboxes[index].slotCount == 0)
     {
-        if (mailboxes[index].waitingProcsHead == NULL)
+        if (wait == 0)
+        {
+            return -2;
+        }
+        else if (mailboxes[index].waitingProcsHead == NULL
+            || mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_SEND)
         {
             addWaitingProc(index, BLOCKED_RECEIVE);
             block(BLOCKED_RECEIVE);
-
-            if (signaled())
-            {
-                return -5;
-            }
-
             removeWaitingProc(index);
         }
         else
         {
             unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND);
-        }
-
-        if (signaled())
-        {
-            return -5;
         }
     }
     // The mailbox has slots
@@ -407,17 +408,19 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_RECEIVE);
             block(BLOCKED_RECEIVE);
-
-            if (signaled())
-            {
-                return -5;
-            }
-
             removeWaitingProc(index);
         }
 
         if (signaled())
         {
+            // If last waiting proc, unblock the freeing process
+            if (mailboxes[index].waitingProcsCount == 1)
+            {
+                unblock(mailboxes[index].freeProc->pid);
+            }
+
+            (mailboxes[index].waitingProcsCount)--;
+
             return -5;
         }
 
@@ -472,6 +475,7 @@ int mailbox_free(int mboxId)
     }
 
     WaitingProcess* proc = mailboxes[index].waitingProcsHead;
+    mailboxes[index].freeProc = addFreeProc(index);
 
     while (proc != NULL)
     {
@@ -490,6 +494,7 @@ int mailbox_free(int mboxId)
         proc = nextProc;
     }
 
+    block(BLOCKED_RELEASE);
     cleanMailbox(index);
 
     // Process signaled while closing mbox
@@ -640,6 +645,7 @@ static int findMbox(int mboxId)
 static void cleanMailbox(int index)
 {
     MailSlot* slot = mailboxes[index].pSlotListHead;
+    WaitingProcessPtr proc = mailboxes[index].freeProc;
 
     // Clean out every slot in the mailbox
     while (slot != NULL)
@@ -655,11 +661,19 @@ static void cleanMailbox(int index)
         slot = nextSlot;
     }
 
+    // Clean freeProc object
+    proc->pid = 0;
+    proc->index = -1;
+    proc->blockedCode = 0;
+    proc->pNextProcess = NULL;
+    proc->pPrevProcess = NULL;
+
+    // Clean mailbox object
     mailboxes[index].pSlotListHead = NULL;
     mailboxes[index].mbox_id = -1;
     mailboxes[index].waitingProcsHead = NULL;
+    mailboxes[index].freeProc = NULL;
 }
-
 
 /**************************************************************************
    Name - clock_handler
@@ -753,6 +767,11 @@ static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t s
 
 static MailSlot* findEmptySlot(int index)
 {
+    if (signaled())
+    {
+        return NULL;
+    }
+
     if (mailboxes[index].fullSlots == mailboxes[index].slotCount)
     {
         return NULL;
@@ -794,7 +813,7 @@ static void addWaitingProc(int index, int code)
     if (target == -1)
     {
         console_output(false, "addWaitingProc(): Waiting procedures table is full. Closing program...\n");
-        exit(1);
+        stop(1);
     }
 
     WaitingProcess* currProc = mailboxes[index].waitingProcsHead;
@@ -813,12 +832,25 @@ static void addWaitingProc(int index, int code)
     {
         mailboxes[index].waitingProcsHead = &waitingProcsTable[target];
     }
+
+    (mailboxes[index].waitingProcsCount)++;
 }
 
 
 static void removeWaitingProc(int index)
 {
+    if (signaled())
+    {
+        return;
+    }
+
     WaitingProcess* target = mailboxes[index].waitingProcsHead;
+
+    if (target == NULL)
+    {
+        console_output(false, "removeWaitingProc(): Mailbox has no waiting processes\n");
+        stop(1);
+    }
 
     while (target->pid != k_getpid())
     {
@@ -826,8 +858,10 @@ static void removeWaitingProc(int index)
 
         if (target == NULL)
         {
-            console_output(false, "removeWaitingProc(): Couldn't find current process in the table. Closing program...\n");
-            exit(1);
+            target = mailboxes[index].waitingProcsHead;
+            break;
+            //console_output(false, "removeWaitingProc(): Couldn't find current process in the table. Closing program...\n");
+            //stop(1);
         }
     }
 
@@ -857,6 +891,8 @@ static void removeWaitingProc(int index)
     target->blockedCode = 0;
     target->pNextProcess = NULL;
     target->pPrevProcess = NULL;
+
+    (mailboxes[index].waitingProcsCount)--;
 }
 
 
@@ -888,7 +924,7 @@ static void createMailSlots(int index, int slotCount)
 
 static int findUnusedSlot()
 {
-    for (int i = 0; i < MAXSLOTS; i++)
+    for (int i = 0; i < GLOBAL_SLOT_POOL_SIZE; i++)
     {
         if (mailSlots[i].mbox_id == -1)
         {
@@ -953,4 +989,35 @@ static void reorderMailSlots(int index)
 
     // Detach new last slot from new head slot
     lastSlot->pNextSlot->pNextSlot = NULL;
+}
+
+
+static WaitingProcessPtr addFreeProc(int index)
+{
+    if (mailboxes[index].freeProc != NULL)
+    {
+        console_output(false, "addFreeProc(): Function called when mailbox already has a freeProc.\n");
+        stop(1);
+    }
+
+    int target = -1;
+    for (int i = 0; i < MAX_PROCESSES; i++)
+    {
+        if (waitingProcsTable[i].pid == 0)
+        {
+            target = i;
+            waitingProcsTable[target].pid = k_getpid();
+            waitingProcsTable[target].index = target;
+            waitingProcsTable[target].blockedCode = BLOCKED_RELEASE;
+            break;
+        }
+    }
+
+    if (target == -1)
+    {
+        console_output(false, "addFreeProc(): Waiting procedures table is full. Closing program...\n");
+        stop(1);
+    }
+
+    return &waitingProcsTable[target];
 }
