@@ -1007,7 +1007,7 @@ static int findUnusedSlot()
 
 static void clearMailSlot(MailSlot* target, int index)
 {
-    strcpy_s(target->message, target->messageSize, "");
+    strcpy_s(target->message, target->messageSize + 1, "");
     target->messageSize = 0;
     target->inUse = 0;
     target->senderPid = 0;
