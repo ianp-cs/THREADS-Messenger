@@ -481,6 +481,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
             memcpy(pMsg, target->message, msg_size);
             clearMailSlot(target, index);
             reorderMailSlots(index);
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND, NULL);
         }
     }
 
