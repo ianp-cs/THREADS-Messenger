@@ -681,6 +681,11 @@ static void initializeAllDevices()
 
 static int findMbox(int mboxId)
 {
+    if (mboxId == -1)
+    {
+        return -1;
+    }
+
     for (int i = 0; i < MAXMBOX; i++)
     {
         if (mailboxes[i].mbox_id == mboxId)
