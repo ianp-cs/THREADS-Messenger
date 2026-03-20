@@ -281,6 +281,11 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         stop(1);
     }
 
+    if (mailboxes[index].freeProc != NULL)
+    {
+        return -1;
+    }
+
     // Mailbox is a zero slot mailbox
     if (mailboxes[index].slotCount == 0)
     {
@@ -391,6 +396,11 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         return -1;
     }
 
+    if (mailboxes[index].freeProc != NULL)
+    {
+        return -1;
+    }
+
     // This is a zero slot mailbox
     if (mailboxes[index].slotCount == 0)
     {
@@ -466,10 +476,12 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
             }
         }
 
-        memcpy(pMsg, target->message, msg_size);
-        clearMailSlot(target, index);
-        reorderMailSlots(index);
-        unblockWaitingProc(target->mbox_id, BLOCKED_SEND, NULL);
+        if (!signaled())
+        {
+            memcpy(pMsg, target->message, msg_size);
+            clearMailSlot(target, index);
+            reorderMailSlots(index);
+        }
     }
 
     if (signaled())
