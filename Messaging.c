@@ -63,6 +63,7 @@ static void clearMailSlot(MailSlot* target, int index);
 static void unblockWaitingProc(int mbox_id, int code, MailSlot* slot);
 static void reorderMailSlots(int index);
 static WaitingProcessPtr addFreeProc(int index);
+static MailSlot* findMail(int index);
 
 
 /* -------------------------- Globals ------------------------------------- */
@@ -296,6 +297,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_SEND, pMsg, msg_size);
             block(BLOCKED_SEND);
+            removeWaitingProc(index, k_getpid());
         }
         else
         {
@@ -323,7 +325,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         }
 
         // Save message
-        if (target != NULL)
+        if (target != NULL && !signaled())
         {
             target->inUse = 1;
             target->messageSize = msg_size;
@@ -405,7 +407,6 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_RECEIVE, NULL, 0);
             block(BLOCKED_RECEIVE);
-
             memcpy(pMsg, mailboxes[index].waitingProcsHead->message, msg_size);
 
             // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
@@ -418,6 +419,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
                 }
             }
 
+            removeWaitingProc(index, k_getpid());
         }
         else
         {
@@ -452,13 +454,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         }
 
         // Mailbox has mail
-        MailSlot* target = mailboxes[index].pSlotListHead;
-
-        while (target != NULL && target->receiverPid != activeProc)
-        {
-            target = target->pNextSlot;
-        }
-
+        MailSlot* target = findMail(index);
 
         // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
         for (int i = 0; i < msg_size; i++)
@@ -527,7 +523,7 @@ int mailbox_free(int mboxId)
         proc->index = -1;
         proc->blockedCode = 0;
         proc->messageSize = 0;
-        strcpy_s(proc->message, proc->messageSize, "");
+        strcpy_s(proc->message, proc->messageSize+1, "");
         proc->pNextProcess = NULL;
         proc->pPrevProcess = NULL;
 
@@ -1020,7 +1016,12 @@ static void unblockWaitingProc(int mbox_id, int code, MailSlot* slot)
                 slot->receiverPid = targetPid;
             }
 
-            removeWaitingProc(index, targetPid);
+            if (mailboxes[index].slotCount != 0)
+            {
+
+                removeWaitingProc(index, targetPid);
+            }
+
             unblock(targetPid);
             return;
         }
@@ -1054,7 +1055,7 @@ static void reorderMailSlots(int index)
 
     if (emptySlot == NULL)
     {
-        console_output(false, "reorderMailSlots(): Could not find the empty slot.\n");
+        //console_output(false, "reorderMailSlots(): Could not find the empty slot.\n");
         return;
     }
 
@@ -1067,6 +1068,7 @@ static void reorderMailSlots(int index)
     else if (emptySlot->pPrevSlot == NULL)
     {
         mailboxes[index].pSlotListHead = emptySlot->pNextSlot;
+        mailboxes[index].pSlotListHead->pPrevSlot = NULL;
     }
     // missing slot is somewhere in the middle
     else
@@ -1111,4 +1113,28 @@ static WaitingProcessPtr addFreeProc(int index)
     }
 
     return &waitingProcsTable[target];
+}
+
+static MailSlot* findMail(int index)
+{
+    MailSlot* target = mailboxes[index].pSlotListHead;
+
+    // Search for first assigned mail
+    while (target != NULL && target->receiverPid != k_getpid())
+    {
+        target = target->pNextSlot;
+    }
+
+    // No assigned mail, search for any unassigned mail
+    if (target == NULL)
+    {
+        target = mailboxes[index].pSlotListHead;
+
+        while (target != NULL && target->receiverPid != 0)
+        {
+            target = target->pNextSlot;
+        }
+    }
+
+    return target;
 }
