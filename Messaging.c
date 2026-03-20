@@ -56,11 +56,11 @@ static void io_handler_messaging(char* device, uint8_t command, uint32_t status,
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static MailSlot* findEmptySlot(int index);
 static void addWaitingProc(int index, int code, void* pMsg, int msg_size);
-static void removeWaitingProc(int index);
+static void removeWaitingProc(int index, int targetPid);
 static void createMailSlots(int index, int slotCount);
 static int findUnusedSlot();
 static void clearMailSlot(MailSlot* target, int index);
-static void unblockWaitingProc(int mbox_id, int code);
+static void unblockWaitingProc(int mbox_id, int code, MailSlot* slot);
 static void reorderMailSlots(int index);
 static WaitingProcessPtr addFreeProc(int index);
 
@@ -130,6 +130,8 @@ int SchedulerEntryPoint(void* arg)
         mailSlots[i].pPrevSlot = NULL;
         mailSlots[i].mbox_id = -1;
         mailSlots[i].inUse = 0;
+        mailSlots[i].senderPid = 0;
+        mailSlots[i].receiverPid = 0;
         mailSlots[i].messageSize = 0;
     }
 
@@ -249,6 +251,7 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
 {
     checkKernelMode("mailbox_send");
 
+    int activeProc = k_getpid(); // For testing
     int index = findMbox(mboxId);
 
     // Input validation
@@ -286,20 +289,19 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         }
         else if (wait == 0 && mailboxes[index].waitingProcsHead != NULL)
         {
-            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE, NULL);
         }
         else if (mailboxes[index].waitingProcsHead == NULL ||
             mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_RECEIVE)
         {
             addWaitingProc(index, BLOCKED_SEND, pMsg, msg_size);
             block(BLOCKED_SEND);
-            removeWaitingProc(index);
         }
         else
         {
             memcpy(mailboxes[index].waitingProcsHead->message, pMsg, msg_size);
             mailboxes[index].waitingProcsHead->messageSize = msg_size;
-            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE);
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_RECEIVE, NULL);
         }
     }
     // The mailbox has slots
@@ -317,7 +319,6 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_SEND, NULL, 0);
             block(BLOCKED_SEND);
-            removeWaitingProc(index);
             target = findEmptySlot(index);
         }
 
@@ -326,10 +327,11 @@ int mailbox_send(int mboxId, void* pMsg, int msg_size, int wait)
         {
             target->inUse = 1;
             target->messageSize = msg_size;
+            target->senderPid = k_getpid();
             (mailboxes[index].fullSlots)++;
             memcpy(target->message, pMsg, msg_size);
 
-            unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE);
+            unblockWaitingProc(target->mbox_id, BLOCKED_RECEIVE, target);
         }
     }
 
@@ -363,6 +365,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
 {
     checkKernelMode("mailbox_receive");
 
+    int activeProc = k_getpid(); // For testing
     int index = findMbox(mboxId);
     int count = 0;
 
@@ -395,7 +398,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         }
         else if (wait == 0 && mailboxes[index].waitingProcsHead != NULL)
         {
-            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND);
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND, NULL);
         }
         else if (mailboxes[index].waitingProcsHead == NULL
             || mailboxes[index].waitingProcsHead->blockedCode != BLOCKED_SEND)
@@ -415,7 +418,6 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
                 }
             }
 
-            removeWaitingProc(index);
         }
         else
         {
@@ -431,7 +433,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
                 }
             }
 
-            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND);
+            unblockWaitingProc(mailboxes[index].mbox_id, BLOCKED_SEND, NULL);
         }
     }
     // The mailbox has slots
@@ -447,11 +449,15 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         {
             addWaitingProc(index, BLOCKED_RECEIVE, NULL, 0);
             block(BLOCKED_RECEIVE);
-            removeWaitingProc(index);
         }
 
         // Mailbox has mail
         MailSlot* target = mailboxes[index].pSlotListHead;
+
+        while (target != NULL && target->receiverPid != activeProc)
+        {
+            target = target->pNextSlot;
+        }
 
 
         // Determine actual length of message (there may not be a null terminator, so we can't use [strlen() + 1]
@@ -467,7 +473,7 @@ int mailbox_receive(int mboxId, void* pMsg, int msg_size, int wait)
         memcpy(pMsg, target->message, msg_size);
         clearMailSlot(target, index);
         reorderMailSlots(index);
-        unblockWaitingProc(target->mbox_id, BLOCKED_SEND);
+        unblockWaitingProc(target->mbox_id, BLOCKED_SEND, NULL);
     }
 
     if (signaled())
@@ -876,7 +882,7 @@ static void addWaitingProc(int index, int code, void* pMsg, int msg_size)
 }
 
 
-static void removeWaitingProc(int index)
+static void removeWaitingProc(int index, int targetPid)
 {
     disableInterrupts();
     if (signaled())
@@ -892,7 +898,7 @@ static void removeWaitingProc(int index)
         stop(1);
     }
 
-    while (target->pid != k_getpid())
+    while (target->pid != targetPid)
     {
         target = target->pNextProcess;
 
@@ -991,11 +997,13 @@ static void clearMailSlot(MailSlot* target, int index)
     strcpy_s(target->message, target->messageSize, "");
     target->messageSize = 0;
     target->inUse = 0;
+    target->senderPid = 0;
+    target->receiverPid = 0;
     (mailboxes[index].fullSlots)--;
 }
 
 
-static void unblockWaitingProc(int mbox_id, int code)
+static void unblockWaitingProc(int mbox_id, int code, MailSlot* slot)
 {
     int index = findMbox(mbox_id);
 
@@ -1005,7 +1013,15 @@ static void unblockWaitingProc(int mbox_id, int code)
     {
         if (target->blockedCode == code)
         {
-            unblock(target->pid);
+            int targetPid = target->pid;
+
+            if (slot != NULL)
+            {
+                slot->receiverPid = targetPid;
+            }
+
+            removeWaitingProc(index, targetPid);
+            unblock(targetPid);
             return;
         }
 
@@ -1016,6 +1032,7 @@ static void unblockWaitingProc(int mbox_id, int code)
 
 static void reorderMailSlots(int index)
 {
+    disableInterrupts();
     // No need to reorder if the mailbox only has 0 or 1 available slots
     if (mailboxes[index].slotCount <= 1)
     {
@@ -1024,20 +1041,45 @@ static void reorderMailSlots(int index)
 
     // Find last mail slot in linked list
     MailSlot* lastSlot = mailboxes[index].pSlotListHead;
+    MailSlot* emptySlot = NULL;
 
     while (lastSlot->pNextSlot != NULL)
     {
+        if (lastSlot->inUse == 0 && emptySlot == NULL)
+        {
+            emptySlot = lastSlot;
+        }
         lastSlot = lastSlot->pNextSlot;
     }
 
-    // Attach current head to end of linked list
-    lastSlot->pNextSlot = mailboxes[index].pSlotListHead;
+    if (emptySlot == NULL)
+    {
+        console_output(false, "reorderMailSlots(): Could not find the empty slot.\n");
+        return;
+    }
 
-    // Make second slot in linked list the new head
-    mailboxes[index].pSlotListHead = mailboxes[index].pSlotListHead->pNextSlot;
+    // Missing slot is at tail
+    if (emptySlot == lastSlot)
+    {
+        return;
+    }
+    // Missing slot is at head
+    else if (emptySlot->pPrevSlot == NULL)
+    {
+        mailboxes[index].pSlotListHead = emptySlot->pNextSlot;
+    }
+    // missing slot is somewhere in the middle
+    else
+    {
+        emptySlot->pPrevSlot->pNextSlot = emptySlot->pNextSlot;
+        emptySlot->pNextSlot->pPrevSlot = emptySlot->pPrevSlot;
+    }
 
-    // Detach new last slot from new head slot
-    lastSlot->pNextSlot->pNextSlot = NULL;
+    emptySlot->pPrevSlot = lastSlot;
+    emptySlot->pNextSlot = NULL;
+    lastSlot->pNextSlot = emptySlot;
+
+    enableInterrupts();
 }
 
 

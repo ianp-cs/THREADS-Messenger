@@ -21,6 +21,8 @@ typedef struct mail_slot
    unsigned char	message[MAX_MESSAGE];
    int				messageSize;
    int				inUse;
+   int				senderPid;
+   int				receiverPid;
 
 } MailSlot;
 
