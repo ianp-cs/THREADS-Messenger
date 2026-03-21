@@ -18,9 +18,9 @@
 #include "message.h"
 
 
-#define DEVICE_NAME_LEN 16
-#define GLOBAL_SLOT_POOL_SIZE MAXSLOTS * 10
-
+#define DEVICE_NAME_LEN 16                      // Max length of device names
+#define GLOBAL_SLOT_POOL_SIZE MAXSLOTS * 10     // Controls the total number of mail slots available to the program
+    
    /* ------------------------- Prototypes ----------------------------------- */
 static void nullsys(system_call_arguments_t* args);
 
@@ -46,14 +46,15 @@ union psr_values {
     unsigned int integer_part;
 };
 
-
-// New Functions
-static void initializeAllDevices();
-static int findMbox(int mboxId);
-static void cleanMailbox(int index);
+// Device handlers
 static void clock_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs);
+
+// Helper Functions
+static void initializeAllDevices();
+static int findMbox(int mboxId);
+static void cleanMailbox(int index);
 static MailSlot* findEmptySlot(int index);
 static void addWaitingProc(int index, int code, void* pMsg, int msg_size);
 static void removeWaitingProc(int index, int targetPid);
@@ -142,9 +143,6 @@ int SchedulerEntryPoint(void* arg)
      * (disks, terminals) need slotted mailboxes since their interrupt
      * handlers use non-blocking sends.
      */
-     // TODO: Create mailboxes for each device.
-     //   devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
-     //   devices[i].deviceMbox = mailbox_create(..., sizeof(int));
     devices[THREADS_CLOCK_DEVICE_ID].deviceMbox = mailbox_create(0, sizeof(int));
 
     for (int i = 1; i < THREADS_MAX_DEVICES; i++)
@@ -152,18 +150,12 @@ int SchedulerEntryPoint(void* arg)
         devices[i].deviceMbox = mailbox_create(5, sizeof(int));
     }
 
-    /* TODO: Initialize the devices using device_initialize().
-     * The devices are: disk0, disk1, term0, term1, term2, term3.
-     * Store the device handle and name in the devices array.
-     */
-
     initializeAllDevices();
 
     InitializeHandlers();
 
     enableInterrupts();
 
-    /* TODO: Create a process for Messaging, then block on a wait until messaging exits.*/
     k_spawn("Messaging", MessagingEntryPoint, NULL, 4 * THREADS_MIN_STACK_SIZE, HIGHEST_PRIORITY);
 
     int status = -1;
@@ -226,13 +218,6 @@ int mailbox_create(int slots, int slot_size)
             break;
         }
     }
-
-    /*
-    if (newId == -1)
-    {
-        console_output(true, "mailbox_create(): Failed to create mailbox, there is no room for more mailboxes.\n");
-    }
-    */
 
     return newId;
 } /* mailbox_create */
@@ -659,7 +644,12 @@ static inline void checkKernelMode(const char* functionName)
     }
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - initializeAllDevices
+   Purpose - Called at startup to initialize every device used by the OS
+   Parameters - None
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void initializeAllDevices()
 {
     checkKernelMode("initializeAllDevices");
@@ -679,7 +669,13 @@ static void initializeAllDevices()
     }
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - findMbox
+   Purpose - finds the index of the mailbox associated with the mbox id parameter
+   Parameters - the id of a mailbox whose index will be returned
+   Returns - the index of the associated mailbox from the mailboxes list, or -1 if the mbox id
+             doesn't match any mailbox in the list
+   ----------------------------------------------------------------------- */
 static int findMbox(int mboxId)
 {
     if (mboxId == -1)
@@ -698,7 +694,12 @@ static int findMbox(int mboxId)
     return -1;
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - cleanMailbox
+   Purpose - clears the fields of the mailbox located in the mailboxes list by the index parameter
+   Parameters - the index of the target mailbox in the mailboxes list
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void cleanMailbox(int index)
 {
     MailSlot* slot = mailboxes[index].pSlotListHead;
@@ -763,7 +764,14 @@ static void clock_handler_messaging(char* device, uint8_t command, uint32_t stat
     time_slice();
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - io_handler_messaging
+   Purpose - called when a disk or terminal device completes an operation and sends its status to 
+             its associated mailbox.
+   Parameters - the name of a device, a command, the device's status register value, and optional 
+                arguments
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void io_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs)
 {
     LARGE_INTEGER unit;
@@ -793,7 +801,13 @@ static void io_handler_messaging(char* device, uint8_t command, uint32_t status,
     }
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - sys_call_handler_messaging
+   Purpose - called when user-mode functions make a system call using system_call()
+   Parameters - the name of a device, a command, the device's status register value, and a pointer
+                to a system_call_arguments_t structure
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t status, void* pArgs)
 {
     LARGE_INTEGER unit;
@@ -821,7 +835,14 @@ static void sys_call_handler_messaging(char* device, uint8_t command, uint32_t s
     }
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - findEmptySlot
+   Purpose - looks for a mail slot assigned to the mailbox, indicated by index, that is not 
+             currently in use and returns a pointer to it
+   Parameters - the index for a target mailbox in the mailboxes list
+   Returns - pointer to an unused mail slot, or NULL if the process has been signaled or
+             no mail slot is available
+   ----------------------------------------------------------------------- */
 static MailSlot* findEmptySlot(int index)
 {
     if (signaled())
@@ -851,7 +872,13 @@ static MailSlot* findEmptySlot(int index)
     return NULL;
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - addWaitingProc
+   Purpose - adds the current process to a target mailbox's list of waiting processes
+   Parameters - the index of the target mailbox, the blocking code for the process, and if the
+                mailbox is zero slot, also a direct message and the size of the message
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void addWaitingProc(int index, int code, void* pMsg, int msg_size)
 {
     int target = -1;
@@ -895,7 +922,13 @@ static void addWaitingProc(int index, int code, void* pMsg, int msg_size)
     (mailboxes[index].waitingProcsCount)++;
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - removeWaitingProc
+   Purpose - removes the process with a pid = targetPid from the target mailbox's waiting processes
+             list
+   Parameters - the index of the target mailbox and the pid of the process that has been unblocked
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void removeWaitingProc(int index, int targetPid)
 {
     disableInterrupts();
@@ -964,7 +997,13 @@ static void removeWaitingProc(int index, int targetPid)
     return;
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - createMailSlots
+   Purpose - pulls available mail slots from the global mail slots pool and assigns them to the 
+             target mailbox
+   Parameters - the index of the target mailbox and the number of mail slots to be assigned
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void createMailSlots(int index, int slotCount)
 {
     if (slotCount == 0)
@@ -990,7 +1029,12 @@ static void createMailSlots(int index, int slotCount)
     }
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - findUnusedSlot
+   Purpose - finds an unassigned mail slot and returns its index from the global mail slots pool
+   Parameters - None
+   Returns - the index of a mail slot
+   ----------------------------------------------------------------------- */
 static int findUnusedSlot()
 {
     for (int i = 0; i < GLOBAL_SLOT_POOL_SIZE; i++)
@@ -1005,7 +1049,14 @@ static int findUnusedSlot()
     return -1;
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - clearMailSlot
+   Purpose - clears the fields of the target mail slot, making it ready to receive a new message. 
+             Does not remove points to adjacent mail slots
+   Parameters - a pointer to the target mail slot to be cleared and the index of the associated
+                mailbox
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void clearMailSlot(MailSlot* target, int index)
 {
     strcpy_s(target->message, target->messageSize + 1, "");
@@ -1016,7 +1067,15 @@ static void clearMailSlot(MailSlot* target, int index)
     (mailboxes[index].fullSlots)--;
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - unblockWaitingProc
+   Purpose - Called by message_send or message_receive to unblock the next waiting process in the
+             queue with the same block code as the code parameter. This function may be called even
+             when there are no waiting procs, in which case nothing happens and the function returns.
+   Parameters - the id of the target mailbox, the blocking code that determines which process to 
+                unblock, and an option mail slot pointer
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void unblockWaitingProc(int mbox_id, int code, MailSlot* slot)
 {
     int index = findMbox(mbox_id);
@@ -1048,7 +1107,13 @@ static void unblockWaitingProc(int mbox_id, int code, MailSlot* slot)
     }
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - reorderMailSlots
+   Purpose - called whenever a mail slot's mail has been received. Pushes the now emptied mail slot
+             to the back of the list of mail slots for the target mailbox
+   Parameters - the index of the target mailbox
+   Returns - None
+   ----------------------------------------------------------------------- */
 static void reorderMailSlots(int index)
 {
     disableInterrupts();
@@ -1102,7 +1167,14 @@ static void reorderMailSlots(int index)
     enableInterrupts();
 }
 
-
+/* ------------------------------------------------------------------------
+   Name - addFreeProc
+   Purpose - assigns the current proccess as the freeing process for the target mailbox. The 
+             process is added to the global waiting processes table, but not the mailbox's
+             waiting process list
+   Parameters - the index of the target mailbox
+   Returns - None
+   ----------------------------------------------------------------------- */
 static WaitingProcessPtr addFreeProc(int index)
 {
     if (mailboxes[index].freeProc != NULL)
@@ -1133,6 +1205,13 @@ static WaitingProcessPtr addFreeProc(int index)
     return &waitingProcsTable[target];
 }
 
+/* ------------------------------------------------------------------------
+   Name - findMail
+   Purpose - called by a receiving process to receive the first mail specifically assigned to it,
+             and if none is found, receives the first unassigned mail in the list of mail slots
+   Parameters - the index of the target mailbox
+   Returns - None
+   ----------------------------------------------------------------------- */
 static MailSlot* findMail(int index)
 {
     MailSlot* target = mailboxes[index].pSlotListHead;

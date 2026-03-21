@@ -17,12 +17,12 @@ typedef struct mail_slot
 {
    SlotPtr			pNextSlot;
    SlotPtr			pPrevSlot;
-   int				mbox_id;
-   unsigned char	message[MAX_MESSAGE];
+   int				mbox_id;				// ID of the mailbox this slot is assigned to
+   unsigned char	message[MAX_MESSAGE];	
    int				messageSize;
-   int				inUse;
-   int				senderPid;
-   int				receiverPid;
+   int				inUse;					// Contains a message to be received
+   int				senderPid;				// The pid of the sending process
+   int				receiverPid;			// The pid of the receiving process
 
 } MailSlot;
 
@@ -30,16 +30,16 @@ typedef struct waiting_process
 {
    WaitingProcessPtr    pNextProcess;
    WaitingProcessPtr    pPrevProcess;
-   int					blockedCode;
+   int					blockedCode;			
    int                  pid;
    int					index;
    unsigned char		message[MAX_MESSAGE];	// Used in zero slot mailboxes to send a direct message
-   int					messageSize;
+   int					messageSize;			// Used in zero slot mailboxes to send a direct message
 } WaitingProcess;
 
 struct mailbox 
 {
-   SlotPtr				pSlotListHead;
+   SlotPtr				pSlotListHead;					// Points to the first mail slot in the mailbox. Is rotated as messages are received from mailboxes
    int					mbox_id;
    MAILBOX_TYPE			type;
    MAILBOX_STATUS		status;
